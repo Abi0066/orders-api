@@ -8,6 +8,7 @@ on:
 permissions:
   contents: read
   packages: write   # push to ghcr.io from the image job
+  id-token: write   # keyless signing: OIDC token -> short-lived Fulcio certificate
 
 jobs:
   test:
@@ -64,19 +65,46 @@ jobs:
           tags: |
             ghcr.io/abi0066/orders-api:sha-${{ github.sha }}
             ghcr.io/abi0066/orders-api:latest
+          # buildx attaches build provenance and an SPDX SBOM as OCI attestations
+          # next to the image, readable with `docker buildx imagetools inspect`.
+          provenance: true
+          sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Install cosign
+        if: github.event_name == 'push'
+        uses: sigstore/cosign-installer@v4.1.3
+
+      # Keyless: the workflow's OIDC token is exchanged for a short-lived
+      # certificate, so there is no long-lived signing key to store or leak. The
+      # signature is attached to the digest, i.e. to the exact bytes that were
+      # scanned two steps earlier.
+      - name: Sign the image (keyless)
+        if: github.event_name == 'push'
+        run: |
+          digest=$(docker buildx imagetools inspect "ghcr.io/abi0066/orders-api:sha-${{ github.sha }}" \
+            --format '{{json .Manifest}}' | jq -r .digest)
+          echo "signing ghcr.io/abi0066/orders-api@${digest}"
+          cosign sign --yes "ghcr.io/abi0066/orders-api@${digest}"
+
       # The sha tag is immutable, so the GitOps repository can pin exactly what was
-      # built and scanned. Nothing here bumps orders-gitops: that commit is a
+      # built, scanned and signed. Nothing here bumps orders-gitops: that commit is a
       # deliberate release step, not a side effect of a merge.
       - name: Summary
         if: github.event_name == 'push'
         run: |
           {
-            echo "### Image published"
+            echo "### Image published, scanned and signed"
             echo ""
             echo '`ghcr.io/abi0066/orders-api:sha-'"${{ github.sha }}"'`'
+            echo ""
+            echo "Verify it:"
+            echo '```'
+            echo "cosign verify ghcr.io/abi0066/orders-api:sha-${{ github.sha }} \\"
+            echo "  --certificate-identity-regexp 'https://github.com/Abi0066/orders-api/.github/workflows/ci.yml@refs/heads/main' \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com"
+            echo '```'
             echo ""
             echo "Next: pin that tag in the GitOps repo with \`scripts/bump-and-push.sh\`."
           } >> "$GITHUB_STEP_SUMMARY"
