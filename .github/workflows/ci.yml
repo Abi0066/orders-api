@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+  packages: write   # push to ghcr.io from the image job
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -25,7 +29,7 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4.4.1
 
-      - name: Build image
+      - name: Build image for scanning
         run: docker build -t orders-api:ci .
 
       # Fails the job on CRITICAL/HIGH vulnerabilities that have a fix available.
@@ -41,5 +45,38 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
 
-      # Nothing is pushed on purpose: images reach the demo cluster through
-      # `kind load`, and the GitOps repository owns the deployment.
+      # Publishing happens only after the scan passes, and only on main: a pull
+      # request builds and scans, it does not create a package version.
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/abi0066/orders-api:sha-${{ github.sha }}
+            ghcr.io/abi0066/orders-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The sha tag is immutable, so the GitOps repository can pin exactly what was
+      # built and scanned. Nothing here bumps orders-gitops: that commit is a
+      # deliberate release step, not a side effect of a merge.
+      - name: Summary
+        if: github.event_name == 'push'
+        run: |
+          {
+            echo "### Image published"
+            echo ""
+            echo '`ghcr.io/abi0066/orders-api:sha-'"${{ github.sha }}"'`'
+            echo ""
+            echo "Next: pin that tag in the GitOps repo with \`scripts/bump-and-push.sh\`."
+          } >> "$GITHUB_STEP_SUMMARY"
