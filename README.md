@@ -1,5 +1,7 @@
 # orders-api
 
+[![ci](https://github.com/Abi0066/orders-api/actions/workflows/ci.yml/badge.svg)](https://github.com/Abi0066/orders-api/actions/workflows/ci.yml)
+
 Small Express service used as the workload of a progressive-delivery demo
 (Kind + Argo Rollouts + Prometheus + ingress-nginx). The application itself is
 deliberately boring; what matters is that it exposes **honest metrics** and a
@@ -62,10 +64,13 @@ npm start                      # or: APP_VERSION=v2 FAIL_RATE=100 npm start
 docker build -t ghcr.io/abi0066/orders-api:v1 .
 ```
 
-Two details that matter for the Kind demo:
+Three details that matter for the Kind demo:
 
 - the runtime stage runs as the unprivileged `node` user, so the Rollout can set
   `runAsNonRoot`, `readOnlyRootFilesystem: true` and drop **all** capabilities;
+- `npm`/`npx` are removed from the runtime stage: they are build-time tools and
+  their bundled dependencies (sigstore, picomatch…) were the only CRITICAL/HIGH
+  findings in the Trivy scan of a service that just runs `node src/app.js`;
 - the image is referenced with its full registry path (`ghcr.io/...`). A bare
   `orders-api:v1` loaded with `kind load docker-image` lands in containerd as
   `localhost/orders-api:v1` and a pod asking for `orders-api:v1` will not find it.
