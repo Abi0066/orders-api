@@ -81,6 +81,15 @@ plus `APP_VERSION`/`FAIL_RATE`, so a failure can be reproduced without touching 
 
 ## CI
 
-`.github/workflows/ci.yml` runs the test suite, builds the image and scans it with
-Trivy (fails on CRITICAL/HIGH, fixed versions only). It does **not** push or deploy:
-the GitOps loop lives in the companion `orders-gitops` repository.
+`.github/workflows/ci.yml` runs the test suite, builds the image, scans it with Trivy
+(fails on CRITICAL/HIGH, fixed versions only) and — on `main`, only after the scan
+passes — pushes it to GHCR:
+
+```
+ghcr.io/abi0066/orders-api:sha-<commit>
+ghcr.io/abi0066/orders-api:latest
+```
+
+The package is publicly pullable (no credentials needed). The workflow does not
+deploy: pinning the new tag in the demo cluster is a commit in the companion
+`orders-gitops` repository, which ArgoCD reconciles.
