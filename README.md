@@ -82,14 +82,48 @@ plus `APP_VERSION`/`FAIL_RATE`, so a failure can be reproduced without touching 
 ## CI
 
 `.github/workflows/ci.yml` runs the test suite, builds the image, scans it with Trivy
-(fails on CRITICAL/HIGH, fixed versions only) and — on `main`, only after the scan
-passes — pushes it to GHCR:
+(fails on CRITICAL/HIGH, fixed versions only), pushes it to GHCR and signs it:
 
 ```
-ghcr.io/abi0066/orders-api:sha-<commit>
+ghcr.io/abi0066/orders-api:sha-<commit>   (immutable)
 ghcr.io/abi0066/orders-api:latest
 ```
 
-The package is publicly pullable (no credentials needed). The workflow does not
-deploy: pinning the new tag in the demo cluster is a commit in the companion
-`orders-gitops` repository, which ArgoCD reconciles.
+The package is publicly pullable, signing is **keyless** (`id-token: write` → short-lived
+Fulcio certificate, entry in the Rekor transparency log, no long-lived key to store or
+leak), and buildx attaches build provenance + an SPDX SBOM as OCI attestations next to
+the image.
+
+### Verify a published image
+
+```bash
+cosign verify ghcr.io/abi0066/orders-api:sha-<commit> \
+  --certificate-identity-regexp 'https://github.com/Abi0066/orders-api/.github/workflows/ci.yml@refs/heads/main' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Expected: `The cosign claims were validated`, `Existence of the claims in the
+transparency log was verified offline`, `The code-signing certificate was verified
+using trusted certificate authority certificates`.
+
+The provenance/SBOM attestations live in the image index; this works without Docker:
+
+```bash
+TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:abi0066/orders-api:pull" | jq -r .token)
+curl -s -H "Authorization: Bearer $TOKEN" \
+  -H 'Accept: application/vnd.oci.image.index.v1+json' \
+  "https://ghcr.io/v2/abi0066/orders-api/manifests/sha-<commit>" \
+  | jq -r '.manifests[] | "\(.platform.architecture) \(.annotations["vnd.docker.reference.type"] // "-")"'
+# amd64  -
+# unknown  attestation-manifest
+```
+
+On a machine with Docker, `docker buildx imagetools inspect --format '{{json .SBOM}}'
+ghcr.io/abi0066/orders-api:sha-<commit>` prints the SBOM itself.
+
+The workflow does not deploy: pinning the new tag in the demo cluster is a commit in
+the companion `orders-gitops` repository, which ArgoCD reconciles.
+
+**Not in place yet:** nothing *enforces* the signature at admission. A Kyverno or
+Connaisseur policy refusing unsigned images is the next step — today the signature is
+verifiable, not mandatory.
