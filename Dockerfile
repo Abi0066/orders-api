@@ -17,6 +17,13 @@ COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package.json ./
 COPY --chown=node:node src ./src
 
+# npm/npx are build-time tools. Keeping them in the runtime image drags in their
+# own dependency tree (sigstore, picomatch, ...) which is pure vulnerability
+# surface for a container that only ever runs `node src/app.js` -- and it is what
+# made the first Trivy run fail on packages the application does not even use.
+# Must run while still root, before switching to the unprivileged user.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 USER node
 EXPOSE 3000
 
